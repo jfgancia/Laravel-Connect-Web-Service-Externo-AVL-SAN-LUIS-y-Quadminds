@@ -1,0 +1,131 @@
+name: ci/cd workflow
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        php: [7.3, 7.4]
+
+    name: Test - PHP ${{ matrix.php }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Cache PHP dependencies
+        uses: actions/cache@v1
+        with:
+          path: vendor
+          key: dependencies-php-${{ matrix.php }}-composer-${{ hashFiles('**/composer.lock') }}
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite, gd
+          coverage: none
+
+      - name: Copy ENV Laravel Configuration for CI
+        run: php -r "file_exists('.env') || copy('.env.example', '.env');"
+
+      - name: Install dependencies
+        run: composer install --no-ansi --no-interaction --no-scripts --no-suggest --no-progress --prefer-dist
+
+      - name: Generate key
+        run: php artisan key:generate
+
+      - name: Execute tests
+        run: vendor/bin/phpunit --verbose
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: tests
+    if: github.ref == 'refs/heads/master'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+        ## SUBE INDEX MANTENIMIENTO
+      - name: Upload mantenimiento
+        uses: sand4rt/ftp-deployer@v1.3
+        with:
+          sftp: false # optional
+          host: ${{ secrets.FTP_HOST }} # e.g. ftp.host.com or sftp.host.com (without ftp:// or ftps://)
+          port: ${{ secrets.FTP_PORT }} # optional, default is: 21
+          username: ${{ secrets.FTP_USERNAME }} # FTP username
+          password: ${{ secrets.FTP_PASSWORD }} # FTP password
+          remote_folder: ${{ secrets.FTP_PUBLIC_FOLDER }} # optional, remote path of your FTP server
+          local_folder: "./other/mantenimiento/" # optional, local path, default is: dist
+          cleanup: false # optional, remove existing files inside FTP remote folder
+          pasive: true # optional
+
+      - name: Cache PHP dependencies
+        uses: actions/cache@v1
+        with:
+          path: vendor
+          key: dependencies-php-composer-${{ hashFiles('**/composer.lock') }}
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: 7.3
+          extensions: dom, curl, libxml, mbstring, zip, pcntl, pdo, sqlite, pdo_sqlite, gd
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --no-ansi --no-interaction --no-scripts --no-suggest --no-progress --prefer-dist
+      - name: run NPM Install
+        run: npm install
+      - name: run NPM run dev
+        run: npm run production
+
+      ## CREA EL ARCHIVO .ENV PARA SUBIR AL SERVIDOR
+      - uses: "finnp/create-file-action@master"
+        env:
+          FILE_NAME: "./.env"
+          FILE_BASE64: ${{ secrets.DOT_ENV }}
+
+      - name: 📂 Sync files Folder Laravel
+        uses: SamKirkland/FTP-Deploy-Action@4.0.0
+        with:
+          server: ${{ secrets.FTP_HOST }}
+          username: ${{ secrets.FTP_USERNAME}}
+          password: ${{ secrets.FTP_PASSWORD }}
+          protocol: ftp
+          local-dir: "./"
+          server-dir: ${{ secrets.FTP_PRIVATE_FOLDER }}
+          log-level: minimal
+          exclude: .git*
+            - **.git*
+            - .git*/**
+            -  **/.git*/**
+            - node_modules/**
+            - node_modules/**/*
+            - public/**
+            - public/**/*
+      ##
+      - name: Replace Index.php /bootstrap/app.php path
+        run: sed -i 's+/../bootstrap/app.php+/../app_laravel/bootstrap/app.php+g' ./public/index.php
+      - name: Replace Index.php /vendor/autoload.php path
+        run: sed -i 's+/../vendor/autoload.php+/../app_laravel/vendor/autoload.php+g' ./public/index.php
+      - name: Bind public Path
+        run: sed -i "39 a \$app->bind('path.public', function() { return __DIR__; });" ./public/index.php
+
+      - name: FTP Deployer
+        uses: sand4rt/ftp-deployer@v1.3
+        with:
+          sftp: false # optional
+          host: ${{ secrets.FTP_HOST }} # e.g. ftp.host.com or sftp.host.com (without ftp:// or ftps://)
+          port: ${{ secrets.FTP_PORT }} # optional, default is: 21
+          username: ${{ secrets.FTP_USERNAME }} # FTP username
+          password: ${{ secrets.FTP_PASSWORD }} # FTP password
+          remote_folder: ${{ secrets.FTP_PUBLIC_FOLDER }} # optional, remote path of your FTP server
+          local_folder: "./public/" # optional, local path, default is: dist
+          cleanup: false # optional, remove existing files inside FTP remote folder
+          pasive: true # optional
